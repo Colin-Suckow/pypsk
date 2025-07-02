@@ -13,7 +13,11 @@ class DebugInterface:
         t = np.linspace(0, (1.0/self.samp_rate) * len(samples), len(samples))
         sig = (samples.real * np.sin(t * 2.0 * np.pi * self.carrier_freq)) + (samples.imag * np.cos(t * 2.0 * np.pi * self.carrier_freq))
 
-        plt.plot(sig)
-        plt.show()
+        # plt.plot(sig)
+        # plt.show()
 
         scipy.io.wavfile.write("debugout.wav", self.samp_rate, sig)
+
+    # Blocks until 'num_samples' are recieved. After which the samples are returned
+    def receive(self, num_samples) -> list[complex]:
+        pass

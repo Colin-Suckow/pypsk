@@ -1,6 +1,7 @@
 import modem
 import numpy as np
 from debug_interface import DebugInterface
+import matplotlib.pyplot as plt
 
 def main():
     SAMP_RATE = 44100
@@ -11,9 +12,13 @@ def main():
 
     signal = mmodem.modulate(payload)
 
-    packets = mmodem.demodulate(signal)
+    packetsf = mmodem.demodulate(signal[:len(signal)//2])
 
-    print(f"Demodulated {len(packets)} packets")
+    print(f"Demodulated {len(packetsf)} packets from first")
+
+    packets = mmodem.demodulate(signal[len(signal)//2:])
+
+    print(f"Demodulated {len(packets)} packets from second")
 
     for packet in packets:
         print(packet)

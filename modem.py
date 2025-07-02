@@ -5,6 +5,7 @@ import commpy.filters
 import numpy as np
 import matplotlib.pyplot as plt
 from enum import Enum
+import scipy.signal
 
 SYNC_SIZE = 32
 MAGIC = "CAFEDOOD".encode("utf-8")
@@ -21,6 +22,7 @@ class Modem:
         self.carrier_freq = carrier_freq
 
         self.sps = self.samp_rate // self.baud_rate
+        print(f"Configured modem with {self.sps} samples per symbol")
 
         # Demodulator state
         self.max_sync_delta = 0.1
@@ -34,6 +36,11 @@ class Modem:
         self.teds = []
         self.err_i = 0
         self.bit_buf_max_size = 10000
+        self.last_raw_bit = 0
+        
+        self.filt_size = 2 * self.sps + 1
+        _, self.rcc_taps = self._get_pulse_filt()
+        self.rcc_filt_state = np.zeros(self.filt_size - 1, dtype=complex)
 
     # Wraps payload with a header and CRC, modulates frame into a BPSK signal
     def modulate(self, data: bytearray) -> list[complex]:
@@ -42,7 +49,6 @@ class Modem:
 
         # Pack the payload size
         payload_size = struct.pack(">I", len(data))
-        print(len(data), payload_size)
 
         # Convert payload into bits
         data = utils.as_bits(MAGIC + payload_size + data + crc)
@@ -64,8 +70,7 @@ class Modem:
                 symbols.append(complex(0,0))
 
         # Pulse shape
-        time_idx, h_rrc = self._get_pulse_filt()
-        symbols = np.convolve(symbols, h_rrc)
+        symbols = np.convolve(symbols, self.rcc_taps)
 
         return symbols
 
@@ -74,12 +79,16 @@ class Modem:
     # Keep calling with new samples to update the state machine
     def demodulate(self, signal: list[complex]) -> list[bytearray]:
         # Apply the second half of our pulse shaping filter
-        time_idx, h_rrc = self._get_pulse_filt() 
-        signal = np.convolve(signal, h_rrc)
+        signal, self.rcc_filt_state = scipy.signal.lfilter(
+            self.rcc_taps,
+            [1.0],
+            signal,
+            zi=self.rcc_filt_state
+        )
 
         i = 0
         raw_bits = []      
-        while i < len(signal):
+        while i <= len(signal):
             # Skip until we reach the sample we want
             if self.remaining_samples > 0:
                 i += 1
@@ -117,13 +126,13 @@ class Modem:
                 print("ERROR: Unknown demod state!")
                 return
 
-        # plt.plot(self.teds)
-        # plt.plot(self.bit_buf)
-        # plt.show()
-
         # We've processed the new samples, now see if we can do something with the bits
         # Undo the differential encoding and save to our bit buffer
-        self.bit_buf += utils.diff_decode(raw_bits)
+        # Also include the last raw bit from the last loop to make sure we don't break the differential encoding
+        self.bit_buf += utils.diff_decode([self.last_raw_bit] + raw_bits)
+
+        # Save the last bit from our raw bits array for the next loop
+        self.last_raw_bit = raw_bits[-1]
 
         # Try to find a packet in our bit buffer
         magic_correlation = np.correlate(np.array(self.bit_buf), np.array(utils.as_bits(MAGIC)))
@@ -134,7 +143,7 @@ class Modem:
         last_bit = 0
 
         # If we didn't find any magics, it should be safe to cull half of our bit buffer
-        if len(self.bit_buf) >= self.bit_buf_max_size:
+        if len(self.bit_buf) >= self.bit_buf_max_size and len(magics) == 0:
             self.bit_buf = self.bit_buf[self.bit_buf_max_size // 2:]
 
         for packet_start in magics:
@@ -163,7 +172,7 @@ class Modem:
 
 
     def _get_pulse_filt(self):
-        return commpy.filters.rcosfilter(2 * 6 * self.sps + 1, 0.3, 1/self.baud_rate, self.samp_rate)
+        return commpy.filters.rcosfilter(self.filt_size, 0.3, 1/self.baud_rate, self.samp_rate)
 
 
 
