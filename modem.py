@@ -37,6 +37,11 @@ class Modem:
         self.err_i = 0
         self.bit_buf_max_size = 10000
         self.last_raw_bit = 0
+        self.erris = []
+        self.demods = []
+
+        self.kp = 0.1
+        self.ki = 0.0
         
         self.filt_size = 2 * self.sps + 1
         _, self.rcc_taps = self._get_pulse_filt()
@@ -72,6 +77,8 @@ class Modem:
         # Pulse shape
         symbols = np.convolve(symbols, self.rcc_taps)
 
+        symbols /= max(symbols)
+
         return symbols
 
 
@@ -88,7 +95,7 @@ class Modem:
 
         i = 0
         raw_bits = []      
-        while i <= len(signal):
+        while i < len(signal):
             # Skip until we reach the sample we want
             if self.remaining_samples > 0:
                 i += 1
@@ -110,11 +117,13 @@ class Modem:
                 self.sample_state = SampleState.EARLY
 
                 # Because this is the late sample, let's do some sync stuff
-                ted = self.prompt.real * (self.late.real - self.early.real)
+                ted = (self.prompt.real * (self.late.real - self.early.real)) / abs(self.prompt.real)
                 self.err_i += ted
 
                 self.teds.append(ted)
-                self.demod_sps += (ted * 0.0000001) + (self.err_i * 0.00000001)
+                self.erris.append(self.err_i)
+                self.demods.append(self.demod_sps)
+                self.demod_sps = self.sps + (ted * self.kp) + (self.err_i * self.ki)
 
                 if self.demod_sps > self.sps * 1.1:
                     self.demod_sps = self.sps * 1.1
