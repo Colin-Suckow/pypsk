@@ -2,30 +2,34 @@ import modem
 import numpy as np
 from debug_interface import DebugInterface
 import matplotlib.pyplot as plt
+from pluto_interface import PlutoInterface
+import time
 
 def main():
-    SAMP_RATE = 44100
-    CARRIER = 1000
+    SAMP_RATE = int(1000e3)
+    CARRIER = int(910e6) # 910mhz 
     mmodem = modem.Modem(SAMP_RATE, 500, CARRIER)
 
     payload = "Wee look at this packet".encode("utf-8")
 
     signal = mmodem.modulate(payload)
 
-    packetsf = mmodem.demodulate(signal[:len(signal)//2])
+    # packetsf = mmodem.demodulate(signal[:len(signal)//2])
 
-    print(f"Demodulated {len(packetsf)} packets from first")
+    # print(f"Demodulated {len(packetsf)} packets from first")
 
-    packets = mmodem.demodulate(signal[len(signal)//2:])
+    # packets = mmodem.demodulate(signal[len(signal)//2:])
 
-    print(f"Demodulated {len(packets)} packets from second")
+    # print(f"Demodulated {len(packets)} packets from second")
 
-    for packet in packets:
-        print(packet)
+    # for packet in packets:
+    #     print(packet)
 
-    interface = DebugInterface(SAMP_RATE, CARRIER)
+    interface = PlutoInterface(SAMP_RATE, CARRIER)
 
-    interface.send(signal)
+    while True:
+        interface.send(signal)
+        time.sleep(3)
 
 
 if __name__ == "__main__":
