@@ -7,12 +7,14 @@ import time
 
 def main():
     SAMP_RATE = int(1000e3)
-    CARRIER = int(910e6) # 910mhz 
+    CARRIER = int(433.4e6) # 910mhz 
     mmodem = modem.Modem(SAMP_RATE, 500, CARRIER)
 
-    payload = "Wee look at this packet".encode("utf-8")
+    payload = "Wee look at this packet. Ok but here's an even longer one I guess. We need more data to make the message longer".encode("utf-8")
 
     signal = mmodem.modulate(payload)
+
+    print(f"Signal time = {len(signal)/SAMP_RATE}s")
 
     # packetsf = mmodem.demodulate(signal[:len(signal)//2])
 
@@ -27,6 +29,7 @@ def main():
 
     interface = PlutoInterface(SAMP_RATE, CARRIER)
 
+    #while True:
     while True:
         interface.send(signal)
         time.sleep(3)
