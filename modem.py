@@ -120,9 +120,9 @@ class Modem:
                 ted = (self.prompt.real * (self.late.real - self.early.real)) / abs(self.prompt.real)
                 self.err_i += ted
 
-                self.teds.append(ted)
-                self.erris.append(self.err_i)
-                self.demods.append(self.demod_sps)
+                # self.teds.append(ted)
+                # self.erris.append(self.err_i)
+                # self.demods.append(self.demod_sps)
                 self.demod_sps = self.sps + (ted * self.kp) + (self.err_i * self.ki)
 
                 if self.demod_sps > self.sps * 1.1:
