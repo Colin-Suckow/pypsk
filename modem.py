@@ -7,13 +7,16 @@ import matplotlib.pyplot as plt
 from enum import Enum
 import scipy.signal
 
-SYNC_SIZE = 32
+SYNC_SIZE = 256
 MAGIC = "CAFEDOOD".encode("utf-8")
 
-class SampleState(Enum):
-    EARLY = 1
-    PROMPT = 2
-    LATE = 3
+def interp_read(data, index):
+    if index < 0:
+        return data[0]
+    elif index >= len(data):
+        return data[-1]
+    else:
+        return data[int(index)] #np.interp(index, range(len(data)), data)
 
 class Modem:
     def __init__(self, samp_rate: int, baud_rate: int, carrier_freq: int):
@@ -24,24 +27,18 @@ class Modem:
         self.sps = self.samp_rate // self.baud_rate
         print(f"Configured modem with {self.sps} samples per symbol")
 
-        # Demodulator state
-        self.max_sync_delta = 0.1
-        self.remaining_samples = 0 # Remaining samples until our next sampling point
         self.bit_buf = []
-        self.early = 0
-        self.prompt = 0
-        self.late = 0
-        self.sample_state = SampleState.EARLY
-        self.demod_sps = self.sps
         self.teds = []
+        self.mus = []
+        self.samp_points = []
         self.err_i = 0
-        self.bit_buf_max_size = 10000
-        self.last_raw_bit = 0
-        self.erris = []
-        self.demods = []
 
-        self.kp = 0.1
+        self.kp = 0.0005
         self.ki = 0.0
+
+        self.last_raw_bit = 0
+
+        self.bit_buf_max_size = 80e3
         
         self.filt_size = 2 * self.sps + 1
         _, self.rcc_taps = self._get_pulse_filt()
@@ -93,47 +90,38 @@ class Modem:
             zi=self.rcc_filt_state
         )
 
-        i = 0
-        raw_bits = []      
-        while i < len(signal):
-            # Skip until we reach the sample we want
-            if self.remaining_samples > 0:
-                i += 1
-                self.remaining_samples -= 1
-                continue
+        
+        # Sync with our new samples
+        raw_bits = []
+        index = 0
+        while index <= len(signal):
+            # Read the samples we need
+            prompt = interp_read(signal, index)
+            self.samp_points.append(index)
+            last = interp_read(signal, (index - self.sps))
+            mid = interp_read(signal, (index - (self.sps / 2)))
 
-            # Sample, and update the state machine
-            if self.sample_state == SampleState.EARLY:
-                self.early = signal[i]
-                self.sample_state = SampleState.PROMPT
-                self.remaining_samples = self.demod_sps // 4
-            elif self.sample_state == SampleState.PROMPT:
-                self.prompt = signal[i]
-                self.sample_state = SampleState.LATE
-                self.remaining_samples = self.demod_sps // 4
-                raw_bits.append(1 if self.prompt.real > 0 else 0)
-            elif self.sample_state == SampleState.LATE:
-                self.late = signal[i]
-                self.sample_state = SampleState.EARLY
+            raw_bits.append(1 if prompt.real > 0 else 0)
 
-                # Because this is the late sample, let's do some sync stuff
-                ted = (self.prompt.real * (self.late.real - self.early.real)) / abs(self.prompt.real)
-                self.err_i += ted
+            ted = np.real(np.conj(mid) * (prompt - last))
+            self.teds.append(ted)
 
-                # self.teds.append(ted)
-                # self.erris.append(self.err_i)
-                # self.demods.append(self.demod_sps)
-                self.demod_sps = self.sps + (ted * self.kp) + (self.err_i * self.ki)
+            err_p = ted * self.kp
+            self.err_i += ted * self.ki
 
-                if self.demod_sps > self.sps * 1.1:
-                    self.demod_sps = self.sps * 1.1
-                elif self.demod_sps < self.sps * 0.9:
-                    self.demod_sps = self.sps * 0.9
+            error = err_p + self.err_i
 
-                self.remaining_samples = self.demod_sps // 2
-            else:
-                print("ERROR: Unknown demod state!")
-                return
+            period_update = self.sps - error
+
+            self.mus.append(period_update % 1.0)
+
+            if period_update < self.sps * 0.5:
+                period_update = self.sps * 0.5
+            elif period_update > self.sps * 1.5:
+                period_update = self.sps * 1.5
+
+            index += period_update
+
 
         # We've processed the new samples, now see if we can do something with the bits
         # Undo the differential encoding and save to our bit buffer
@@ -144,10 +132,10 @@ class Modem:
         self.last_raw_bit = raw_bits[-1]
 
         # Try to find a packet in our bit buffer
-        magic_correlation = np.correlate(np.array(self.bit_buf), np.array(utils.as_bits(MAGIC)))
+        magic_correlation = np.correlate((np.array(self.bit_buf) * 2) - 1, np.array(utils.as_bits(MAGIC)) * 2 - 1)
 
         # Find the indices that match the magic value
-        magics = [i for i, corr in enumerate(magic_correlation) if corr == 25]
+        magics = [i for i, corr in enumerate(magic_correlation) if corr >= len(MAGIC) * 8]
         payloads = []
         last_bit = 0
 
