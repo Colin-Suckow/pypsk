@@ -40,7 +40,7 @@ class Modem:
 
         self.bit_buf_max_size = 80e3
         
-        self.filt_size = 2 * self.sps + 1
+        self.filt_size = 8 * self.sps + 1
         _, self.rcc_taps = self._get_pulse_filt()
         self.rcc_filt_state = np.zeros(self.filt_size - 1, dtype=complex)
 
@@ -72,9 +72,9 @@ class Modem:
                 symbols.append(complex(0,0))
 
         # Pulse shape
-        symbols = np.convolve(symbols, self.rcc_taps)
+        symbols = scipy.signal.lfilter(self.rcc_taps, [1.0], symbols)
 
-        symbols /= max(symbols)
+        symbols /= max(np.abs(symbols))
 
         return symbols
 
@@ -101,7 +101,7 @@ class Modem:
             last = interp_read(signal, (index - self.sps))
             mid = interp_read(signal, (index - (self.sps / 2)))
 
-            raw_bits.append(1 if prompt.real > 0 else 0)
+            raw_bits.append(1 if mid.real > 0 else 0)
 
             ted = np.real(np.conj(mid) * (prompt - last))
             self.teds.append(ted)
