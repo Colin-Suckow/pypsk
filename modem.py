@@ -36,11 +36,21 @@ class Modem:
         self.kp = 0.0005
         self.ki = 0.0
 
+        self.samps = []
+        self.samp_win_size = 256
+
         self.last_raw_bit = 0
+        self.last_t = 0
+        self.siglog = []
 
         self.bit_buf_max_size = 80e3
+
+        self.fine_freq = 0
+        self.fine_phase = 0
+        self.fine_errors = []
+        self.demodcalls = 0
         
-        self.filt_size = 2 * self.sps + 1
+        self.filt_size = 8 * self.sps + 1
         _, self.rcc_taps = self._get_pulse_filt()
         self.rcc_filt_state = np.zeros(self.filt_size - 1, dtype=complex)
 
@@ -82,26 +92,47 @@ class Modem:
     # Maintains state between calls. If a frame was demodulated, it is returned in a list. Otherwise it returns None.
     # Keep calling with new samples to update the state machine
     def demodulate(self, signal: list[complex]) -> list[bytearray]:
+        # Coarse frequency sync
+        sigfft = np.abs(np.fft.fft(signal**2.0))
+        fftfreqs = np.fft.fftfreq(len(signal), 1/self.samp_rate)
+        offset = fftfreqs[np.argmax(sigfft)] / 2
+
+        ts = 1/self.samp_rate
+        t = np.arange(0, ts*len(signal), ts) + self.last_t
+        self.last_t += ts * len(signal)
+        signal *= np.exp(-2j*np.pi*offset*t)
+
         # Apply the second half of our pulse shaping filter
-        signal, self.rcc_filt_state = scipy.signal.lfilter(
-            self.rcc_taps,
-            [1.0],
-            signal,
-            zi=self.rcc_filt_state
-        )
+        # signal, self.rcc_filt_state = scipy.signal.lfilter(
+        #     self.rcc_taps,
+        #     [1.0],
+        #     signal,
+        #     zi=self.rcc_filt_state
+        # )
 
         
+        self.siglog += list(signal)
+
         # Sync with our new samples
         raw_bits = []
         index = 0
+        samps = []
+        period_update = self.sps
         while index <= len(signal):
             # Read the samples we need
             prompt = interp_read(signal, index)
-            self.samp_points.append(index)
-            last = interp_read(signal, (index - self.sps))
-            mid = interp_read(signal, (index - (self.sps / 2)))
+            self.samp_points.append(index + (len(signal) * self.demodcalls))
 
-            raw_bits.append(1 if prompt.real > 0 else 0)
+            if len(self.samp_points) > 1000:
+                plt.plot(self.siglog)
+                for s in self.samp_points:
+                    plt.axvline(s, color="red")
+                plt.show()
+                exit(1)
+
+            last = interp_read(signal, (index - period_update))
+            mid = interp_read(signal, (index - (period_update / 2)))
+            samps.append(prompt)
 
             ted = np.real(np.conj(mid) * (prompt - last))
             self.teds.append(ted)
@@ -122,6 +153,26 @@ class Modem:
 
             index += period_update
 
+        self.demodcalls += 1
+
+        alpha = 10
+        beta = 0.00932
+        for s in samps:
+            #s *= np.exp(-1j*self.fine_phase)
+            self.samps.append(s)
+            raw_bits.append(1 if s.real > 0 else 0)
+            error = s.real * s.imag
+            self.fine_freq += beta * error
+            self.fine_phase += self.fine_freq + (alpha * error)
+
+            while self.fine_phase >= 2*np.pi:
+                self.fine_phase -= 2*np.pi
+            while self.fine_phase < 0:
+                self.fine_phase += 2*np.pi
+
+        if len(self.samps) >= self.samp_win_size:
+            self.samps = self.samps[-self.samp_win_size:]
+
 
         # We've processed the new samples, now see if we can do something with the bits
         # Undo the differential encoding and save to our bit buffer
@@ -141,7 +192,7 @@ class Modem:
 
         # If we didn't find any magics, it should be safe to cull half of our bit buffer
         if len(self.bit_buf) >= self.bit_buf_max_size and len(magics) == 0:
-            self.bit_buf = self.bit_buf[self.bit_buf_max_size // 2:]
+            self.bit_buf = self.bit_buf[int(-(self.bit_buf_max_size // 2)):]
 
         for packet_start in magics:
             try:
